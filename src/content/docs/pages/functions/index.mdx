@@ -1,14 +1,64 @@
----
-pcx_content_type: navigation
-title: Functions
-sidebar:
-  order: 6
----
+/**
+ * Cloudflare Pages Function - VLESS/WS/TLS Proxy
+ * This script serves as a VLESS proxy over WebSocket.
+ */
 
-import { DirectoryListing } from "~/components";
+// --- Configuration ---
+// Note: This script uses the Environment Variable env.UUID for the user ID (already set).
+const PROXY_IP = '172.65.65.73'; 
+const VLESS_PATH = '/'; 
+const TARGET_HOST = 'cloud106.pages.dev'; 
+const FALLBACK_UUID = '3a7b910ae2f29f906da4be9338f22665'; 
+// ---------------------
 
-Pages Functions allows you to build full-stack applications by executing code on the Cloudflare network with [Cloudflare Workers](/workers/). With Functions, you can introduce application aspects such as authenticating, handling form submissions, or working with middleware. [Workers runtime features](/workers/runtime-apis/) are configurable on Pages Functions, including [compatibility with a subset of Node.js APIs](/workers/runtime-apis/nodejs) and the ability to set a [compatibility date or compatibility flag](/workers/configuration/compatibility-dates/). Use Functions to deploy server-side code to enable dynamic functionality without running a dedicated server.
+function handleVless(request, user_id, path) {
+    const webSocketPair = new WebSocketPair();
+    const client = webSocketPair[0];
 
-To provide feedback or ask questions on Functions, join the [Cloudflare Developers Discord](https://discord.com/invite/cloudflaredev) and connect with the Cloudflare team in the [#functions channel](https://discord.com/channels/595317990191398933/910978223968518144).
+    const host_name = PROXY_IP; 
+    const url = `wss://${host_name}:443${path}`;
 
-<DirectoryListing />
+    let headers = new Headers(request.headers);
+    headers.set('Host', TARGET_HOST); 
+
+    const fetcher = fetch(url, {
+        method: 'CONNECT',
+        headers: headers,
+        cf: { /* Settings */ },
+    }).catch(err => {
+        console.error("Fetch error to proxy IP:", err);
+        try { client.close(1011, `Proxy error: ${err.message}`); } catch(e) { /* ignore */ }
+    });
+
+    return new Response(null, {
+        status: 101,
+        webSocket: webSocketPair[1],
+        headers: {
+            'Upgrade': 'websocket',
+            'Connection': 'Upgrade',
+        }
+    });
+}
+
+// Main fetch handler for Cloudflare Pages Function
+export default {
+    async fetch(request, env) {
+        const user_id = env.UUID || FALLBACK_UUID; 
+        const url = new URL(request.url);
+        
+        if (url.pathname === VLESS_PATH) {
+            const hasUpgrade = request.headers.get("Upgrade");
+            if (hasUpgrade && hasUpgrade.toLowerCase() === "websocket") {
+                return handleVless(request, user_id, url.pathname);
+            }
+        }
+        
+        // Response for normal browser traffic
+        return new Response("Cloudflare VLESS Proxy Running.", {
+            status: 200,
+            headers: {
+                "Content-Type": "text/plain"
+            }
+        });
+    }
+};
